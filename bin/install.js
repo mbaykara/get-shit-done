@@ -888,7 +888,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   // 4. Remove GSD hooks
   const hooksDir = path.join(targetDir, 'hooks');
   if (fs.existsSync(hooksDir)) {
-    const gsdHooks = ['gsd-statusline.js', 'gsd-check-update.js', 'gsd-check-update.sh'];
+    const gsdHooks = ['gsd-statusline.js', 'gsd-check-update.js', 'gsd-check-update.sh', 'gsd-context-guard.js', 'gsd-precompact-guard.js'];
     let hookCount = 0;
     for (const hook of gsdHooks) {
       const hookPath = path.join(hooksDir, hook);
@@ -933,28 +933,33 @@ function uninstall(isGlobal, runtime = 'claude') {
       console.log(`  ${green}✓${reset} Removed GSD statusline from settings`);
     }
 
-    // Remove GSD hooks from SessionStart
-    if (settings.hooks && settings.hooks.SessionStart) {
-      const before = settings.hooks.SessionStart.length;
-      settings.hooks.SessionStart = settings.hooks.SessionStart.filter(entry => {
-        if (entry.hooks && Array.isArray(entry.hooks)) {
-          // Filter out GSD hooks
-          const hasGsdHook = entry.hooks.some(h =>
-            h.command && (h.command.includes('gsd-check-update') || h.command.includes('gsd-statusline'))
-          );
-          return !hasGsdHook;
+    // Remove GSD hooks from SessionStart, PostToolUse, PreCompact
+    const hookEvents = {
+      SessionStart: h => h.command && (h.command.includes('gsd-check-update') || h.command.includes('gsd-statusline')),
+      PostToolUse: h => h.command && h.command.includes('gsd-context-guard'),
+      PreCompact: h => h.command && h.command.includes('gsd-precompact-guard'),
+    };
+    if (settings.hooks) {
+      for (const [eventType, matcher] of Object.entries(hookEvents)) {
+        if (settings.hooks[eventType]) {
+          const before = settings.hooks[eventType].length;
+          settings.hooks[eventType] = settings.hooks[eventType].filter(entry => {
+            if (entry.hooks && Array.isArray(entry.hooks)) {
+              return !entry.hooks.some(matcher);
+            }
+            return true;
+          });
+          if (settings.hooks[eventType].length < before) {
+            settingsModified = true;
+          }
+          if (settings.hooks[eventType].length === 0) {
+            delete settings.hooks[eventType];
+          }
         }
-        return true;
-      });
-      if (settings.hooks.SessionStart.length < before) {
-        settingsModified = true;
+      }
+      if (settingsModified) {
         console.log(`  ${green}✓${reset} Removed GSD hooks from settings`);
       }
-      // Clean up empty array
-      if (settings.hooks.SessionStart.length === 0) {
-        delete settings.hooks.SessionStart;
-      }
-      // Clean up empty hooks object
       if (Object.keys(settings.hooks).length === 0) {
         delete settings.hooks;
       }
@@ -1516,6 +1521,12 @@ function install(isGlobal, runtime = 'claude') {
   const updateCheckCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-check-update.js')
     : 'node ' + dirName + '/hooks/gsd-check-update.js';
+  const contextGuardCommand = isGlobal
+    ? buildHookCommand(targetDir, 'gsd-context-guard.js')
+    : 'node ' + dirName + '/hooks/gsd-context-guard.js';
+  const precompactGuardCommand = isGlobal
+    ? buildHookCommand(targetDir, 'gsd-precompact-guard.js')
+    : 'node ' + dirName + '/hooks/gsd-precompact-guard.js';
 
   // Enable experimental agents for Gemini CLI (required for custom sub-agents)
   if (isGemini) {
@@ -1551,6 +1562,40 @@ function install(isGlobal, runtime = 'claude') {
         ]
       });
       console.log(`  ${green}✓${reset} Configured update check hook`);
+    }
+
+    // Configure PostToolUse hook for context window guard
+    if (!settings.hooks.PostToolUse) {
+      settings.hooks.PostToolUse = [];
+    }
+    const hasContextGuard = settings.hooks.PostToolUse.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-context-guard'))
+    );
+    if (!hasContextGuard) {
+      settings.hooks.PostToolUse.push({
+        hooks: [{
+          type: 'command',
+          command: contextGuardCommand
+        }]
+      });
+      console.log(`  ${green}✓${reset} Configured context guard hook`);
+    }
+
+    // Configure PreCompact hook as context safety net
+    if (!settings.hooks.PreCompact) {
+      settings.hooks.PreCompact = [];
+    }
+    const hasPrecompactGuard = settings.hooks.PreCompact.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-precompact-guard'))
+    );
+    if (!hasPrecompactGuard) {
+      settings.hooks.PreCompact.push({
+        hooks: [{
+          type: 'command',
+          command: precompactGuardCommand
+        }]
+      });
+      console.log(`  ${green}✓${reset} Configured precompact guard hook`);
     }
   }
 

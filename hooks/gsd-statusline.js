@@ -17,6 +17,7 @@ process.stdin.on('end', () => {
     const dir = data.workspace?.current_dir || process.cwd();
     const session = data.session_id || '';
     const remaining = data.context_window?.remaining_percentage;
+    const homeDir = os.homedir();
 
     // Context window display (shows USED percentage scaled to 80% limit)
     // Claude Code enforces an 80% context limit, so we scale to show 100% at that point
@@ -26,6 +27,18 @@ process.stdin.on('end', () => {
       const rawUsed = Math.max(0, Math.min(100, 100 - rem));
       // Scale: 80% real usage = 100% displayed
       const used = Math.min(100, Math.round((rawUsed / 80) * 100));
+
+      // Persist context state for context guard hook
+      const stateFile = path.join(homeDir, '.claude', 'cache', 'gsd-context-state.json');
+      try {
+        fs.writeFileSync(stateFile, JSON.stringify({
+          remaining_percentage: rem,
+          raw_used: rawUsed,
+          used_scaled: used,
+          timestamp: Date.now(),
+          session_id: session
+        }));
+      } catch (e) {}
 
       // Build progress bar (10 segments)
       const filled = Math.floor(used / 10);
@@ -45,7 +58,6 @@ process.stdin.on('end', () => {
 
     // Current task from todos
     let task = '';
-    const homeDir = os.homedir();
     const todosDir = path.join(homeDir, '.claude', 'todos');
     if (session && fs.existsSync(todosDir)) {
       try {

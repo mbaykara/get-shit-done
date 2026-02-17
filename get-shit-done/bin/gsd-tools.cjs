@@ -633,6 +633,10 @@ function cmdConfigEnsureSection(cwd, raw) {
       plan_check: true,
       verifier: true,
     },
+    context: {
+      auto_pause: true,
+      pause_threshold: 70,
+    },
     parallelization: true,
     brave_search: hasBraveSearch,
   };
@@ -640,6 +644,7 @@ function cmdConfigEnsureSection(cwd, raw) {
     ...hardcoded,
     ...userDefaults,
     workflow: { ...hardcoded.workflow, ...(userDefaults.workflow || {}) },
+    context: { ...hardcoded.context, ...(userDefaults.context || {}) },
   };
 
   try {
@@ -4907,6 +4912,28 @@ function cmdInitProgress(cwd, includes, raw) {
   output(result, raw);
 }
 
+function cmdContextCheck(raw) {
+  const homeDir = require('os').homedir();
+  const stateFile = path.join(homeDir, '.claude', 'cache', 'gsd-context-state.json');
+
+  if (!fs.existsSync(stateFile)) {
+    output({ available: false, reason: 'no_state_file' }, raw, 'No context state available');
+    return;
+  }
+
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const stale = Date.now() - state.timestamp > 60000;
+
+  output({
+    available: true,
+    stale,
+    remaining_percentage: state.remaining_percentage,
+    raw_used: state.raw_used,
+    used_scaled: state.used_scaled,
+    age_seconds: Math.round((Date.now() - state.timestamp) / 1000)
+  }, raw, `Context: ${state.raw_used}% used (${stale ? 'stale' : 'fresh'})`);
+}
+
 // ─── CLI Router ───────────────────────────────────────────────────────────────
 
 async function main() {
@@ -5315,6 +5342,11 @@ async function main() {
         limit: limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 10,
         freshness: freshnessIdx !== -1 ? args[freshnessIdx + 1] : null,
       }, raw);
+      break;
+    }
+
+    case 'context-check': {
+      cmdContextCheck(raw);
       break;
     }
 
